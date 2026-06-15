@@ -31,7 +31,6 @@ Create tasks from any Discord message via right-click context menu. Tasks appear
 1. In the left sidebar click **Bot**.
 2. Click **Add Bot** → **Yes, do it!**
 3. Under the bot's username click **Reset Token**, confirm, then **copy the token** — this is your `DISCORD_TOKEN`. Store it somewhere safe; you won't see it again.
-4. Disable **Public Bot** so only you can invite it.
 
 ### 1c. Enable privileged intents and set default permissions
 
