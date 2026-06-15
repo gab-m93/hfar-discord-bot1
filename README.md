@@ -72,12 +72,24 @@ These are the same permissions you'll select again in step 1d when generating th
 
 ## 2. First-time server setup
 
-After the bot is running, do this once:
+### 2a. Create the dashboard channel
 
-1. Create a channel called `#task-dashboard` (or whatever name you prefer) and copy its ID:
-   - Enable Developer Mode in Discord settings (Advanced → Developer Mode)
-   - Right-click the channel → **Copy Channel ID**
-2. Run `/task setup` in any channel (requires Manage Channels permission). This posts a header embed in the dashboard channel explaining how to use the bot.
+In your Discord server, create a text channel called `#task-dashboard` (or any name you like).
+
+### 2b. Enable Developer Mode and copy the channel ID
+
+Developer Mode makes Discord show internal IDs, which you need for the env variable.
+
+1. Open Discord → click the **gear icon ⚙️** next to your username (bottom left) → **User Settings**
+2. In the left sidebar scroll to **Advanced** → turn on **Developer Mode**
+3. Close settings, go back to your server
+4. Right-click **#task-dashboard** in the channel list → **Copy Channel ID**
+
+That number (e.g. `1234567890123456789`) is your `TASK_DASHBOARD_CHANNEL_ID`.
+
+### 2c. Post the dashboard header
+
+Once the bot is deployed and running, run `/task setup` in any channel (requires Manage Channels permission). This posts an explanatory header embed in the dashboard channel.
 
 ---
 
