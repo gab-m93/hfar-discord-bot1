@@ -33,15 +33,28 @@ Create tasks from any Discord message via right-click context menu. Tasks appear
 3. Under the bot's username click **Reset Token**, confirm, then **copy the token** — this is your `DISCORD_TOKEN`. Store it somewhere safe; you won't see it again.
 4. Disable **Public Bot** so only you can invite it.
 
-### 1c. Enable privileged intents
+### 1c. Enable privileged intents and set default permissions
 
-Still on the **Bot** page, scroll to **Privileged Gateway Intents** and turn on:
+Still on the **Bot** page:
+
+**Privileged Gateway Intents** — turn on:
 
 | Intent | Why |
 |---|---|
 | **Message Content Intent** | Lets the bot read the text of the message you right-click to pre-fill the task name |
 
 *(Server Members Intent and Presence Intent are **not** needed.)*
+
+**Bot Permissions** (shown below the intents on the same page) — check:
+
+| Permission | Why |
+|---|---|
+| `View Channels` | See the channels it operates in |
+| `Send Messages` | Post task embeds to the dashboard channel |
+| `Embed Links` | Required to send Discord embeds |
+| `Read Message History` | Used by `/task list` to scan the dashboard for open tasks |
+
+These are the same permissions you'll select again in step 1d when generating the invite URL — setting them here just establishes the defaults.
 
 ### 1d. Generate an invite URL
 
