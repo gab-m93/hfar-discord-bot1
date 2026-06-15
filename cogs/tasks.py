@@ -59,6 +59,9 @@ class Tasks(commands.Cog):
         async for msg in channel.history(limit=200):
             if not msg.embeds or msg.author != self.bot.user:
                 continue
+            # Skip embeds that have no Status field (e.g. the header embed)
+            if not any(f.name == "Status" for f in msg.embeds[0].fields):
+                continue
             data = parse_task_embed(msg.embeds[0])
             if data["status"] == STATUS_OPEN:
                 deadline = data["deadline"]

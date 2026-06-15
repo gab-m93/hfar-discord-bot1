@@ -48,11 +48,12 @@ class TaskCreationView(discord.ui.View):
     async def create_task(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
+        await interaction.response.defer(ephemeral=True)
+
         channel = interaction.client.get_channel(config.TASK_DASHBOARD_CHANNEL_ID)
         if channel is None:
-            await interaction.response.send_message(
-                "Task dashboard channel not found. Ask an admin to run `/task setup`.",
-                ephemeral=True,
+            await interaction.edit_original_response(
+                content="Task dashboard channel not found. Check TASK_DASHBOARD_CHANNEL_ID.",
             )
             return
 
@@ -65,9 +66,15 @@ class TaskCreationView(discord.ui.View):
             status=STATUS_OPEN,
             source_url=self.source_url or None,
         )
-        await channel.send(embed=embed, view=TaskDashboardView())
+        try:
+            await channel.send(embed=embed, view=TaskDashboardView())
+        except discord.HTTPException as e:
+            await interaction.edit_original_response(
+                content=f"Failed to post task: {e}",
+            )
+            return
         self.stop()
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content="✅ Task created in the dashboard!", view=None
         )
 
