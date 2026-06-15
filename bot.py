@@ -23,15 +23,14 @@ bot = commands.Bot(
 
 @bot.event
 async def on_ready() -> None:
-    # Re-register persistent view so old dashboard buttons keep working after restarts
     bot.add_view(TaskDashboardView())
+    await bot.tree.sync()
     log.info("Logged in as %s (id=%s)", bot.user, bot.user.id)
 
 
 async def main() -> None:
     async with bot:
         await bot.load_extension("cogs.tasks")
-        await bot.tree.sync()
         await bot.start(config.DISCORD_TOKEN)
 
 
