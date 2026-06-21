@@ -1,6 +1,5 @@
 import re
 import discord
-import config
 from ui.embeds import (
     build_task_data_embed,
     build_overview_embed,
@@ -167,86 +166,6 @@ class OverviewView(discord.ui.View):
             ephemeral=True,
         )
 
-
-class TaskCreationView(discord.ui.View):
-    """Ephemeral view shown after TaskCreateModal; lets the user assign then post."""
-
-    def __init__(
-        self,
-        title: str,
-        description: str,
-        deadline: str,
-        creator: discord.Member | discord.User,
-        source_url: str,
-    ) -> None:
-        super().__init__(timeout=300)
-        self.title = title
-        self.description = description
-        self.deadline = deadline
-        self.creator = creator
-        self.source_url = source_url
-        self.assignee: discord.Member | discord.User | None = None
-
-    @discord.ui.select(
-        cls=discord.ui.UserSelect,
-        placeholder="Assign to someone (optional)",
-        min_values=0,
-        max_values=1,
-    )
-    async def select_assignee(
-        self, interaction: discord.Interaction, select: discord.ui.UserSelect
-    ) -> None:
-        self.assignee = select.values[0] if select.values else None
-        name = self.assignee.display_name if self.assignee else "nobody"
-        await interaction.response.send_message(
-            f"Assignee set to **{name}**. Click **Create Task** when ready.",
-            ephemeral=True,
-        )
-
-    @discord.ui.button(label="✅ Create Task", style=discord.ButtonStyle.success)
-    async def create_task(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ) -> None:
-        await interaction.response.defer(ephemeral=True)
-
-        channel = interaction.client.get_channel(config.TASK_DASHBOARD_CHANNEL_ID)
-        if channel is None:
-            await interaction.edit_original_response(
-                content="Task dashboard channel not found. Check TASK_DASHBOARD_CHANNEL_ID."
-            )
-            return
-
-        overview_msg = await find_overview(channel)
-        if overview_msg is None:
-            await interaction.edit_original_response(
-                content="No overview message found. Ask an admin to run `/task setup` first."
-            )
-            return
-
-        thread = await get_task_thread(overview_msg)
-        if thread is None:
-            await interaction.edit_original_response(
-                content="Task data thread not found. Ask an admin to run `/task setup` again."
-            )
-            return
-
-        data_embed = build_task_data_embed(
-            title=self.title,
-            description=self.description,
-            creator=self.creator.mention,
-            assignee=self.assignee.mention if self.assignee else "Unassigned",
-            deadline=self.deadline,
-            source_url=self.source_url,
-        )
-        try:
-            await thread.send(embed=data_embed)
-        except discord.HTTPException as e:
-            await interaction.edit_original_response(content=f"Failed to save task: {e}")
-            return
-
-        await rebuild_overview(overview_msg, thread)
-        self.stop()
-        await interaction.edit_original_response(content="✅ Task created!", view=None)
 
 
 class TaskManageView(discord.ui.View):
