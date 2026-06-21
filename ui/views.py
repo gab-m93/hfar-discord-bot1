@@ -13,21 +13,33 @@ from ui.embeds import (
 
 
 async def rebuild_overview(channel: discord.TextChannel) -> None:
-    """Scan the dashboard channel and update the pinned overview message."""
-    # Find the pinned overview message
+    """Scan the dashboard channel and update the overview message."""
+    # Find the overview: check pins first, then fall back to oldest message in channel
+    overview_msg: discord.Message | None = None
     try:
         pins = await channel.pins()
+        overview_msg = next(
+            (
+                p for p in pins
+                if p.author == channel.guild.me
+                and p.embeds
+                and (p.embeds[0].title or "").startswith(OVERVIEW_TITLE_PREFIX)
+            ),
+            None,
+        )
     except discord.HTTPException:
-        return
-    overview_msg = next(
-        (
-            p for p in pins
-            if p.author == channel.guild.me
-            and p.embeds
-            and (p.embeds[0].title or "").startswith(OVERVIEW_TITLE_PREFIX)
-        ),
-        None,
-    )
+        pass
+
+    if overview_msg is None:
+        async for msg in channel.history(limit=50, oldest_first=True):
+            if (
+                msg.author == channel.guild.me
+                and msg.embeds
+                and (msg.embeds[0].title or "").startswith(OVERVIEW_TITLE_PREFIX)
+            ):
+                overview_msg = msg
+                break
+
     if overview_msg is None:
         return
 

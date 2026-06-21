@@ -111,8 +111,13 @@ class Tasks(commands.Cog):
             pass
 
         msg = await channel.send(embed=build_overview_embed([]))
-        await msg.pin()
-        await interaction.followup.send("Overview message created and pinned.", ephemeral=True)
+        try:
+            await msg.pin()
+            note = ""
+        except discord.Forbidden:
+            note = "\n⚠️ Could not pin the message — grant the bot **Manage Messages** permission in the channel and run `/task setup` again, or pin it manually."
+
+        await interaction.followup.send(f"Overview message created.{note}", ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:
