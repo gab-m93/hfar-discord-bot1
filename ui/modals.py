@@ -60,7 +60,7 @@ class TaskCreateModal(discord.ui.Modal, title="Create Task"):
     def __init__(self, source_content: str, source_url: str) -> None:
         super().__init__()
         self.source_url = source_url
-        self.task_title.default = source_content[:100] if source_content else ""
+        self.task_title.default = source_content.replace("\n", " ").strip()[:100] if source_content else ""
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         from ui.views import find_overview, get_task_thread, rebuild_overview
