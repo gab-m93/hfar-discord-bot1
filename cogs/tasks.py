@@ -3,7 +3,13 @@ from discord import app_commands
 from discord.ext import commands
 
 import config
-from ui.embeds import parse_task_embed, STATUS_OPEN, STATUS_COMPLETED
+from ui.embeds import (
+    build_overview_embed,
+    parse_task_embed,
+    is_task_embed,
+    OVERVIEW_TITLE_PREFIX,
+    STATUS_OPEN,
+)
 from ui.modals import TaskCreateModal
 from ui.views import TaskDashboardView
 
@@ -11,7 +17,6 @@ from ui.views import TaskDashboardView
 class Tasks(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        # Register the context menu command on the tree
         self.ctx_menu = app_commands.ContextMenu(
             name="Create Task",
             callback=self.create_task_from_message,
@@ -34,11 +39,9 @@ class Tasks(commands.Cog):
         source_content = message.content or (
             message.embeds[0].title if message.embeds else ""
         )
-        modal = TaskCreateModal(
-            source_content=source_content,
-            source_url=message.jump_url,
+        await interaction.response.send_modal(
+            TaskCreateModal(source_content=source_content, source_url=message.jump_url)
         )
-        await interaction.response.send_modal(modal)
 
     # ── Slash commands ──────────────────────────────────────────────────────
 
@@ -59,8 +62,7 @@ class Tasks(commands.Cog):
         async for msg in channel.history(limit=200):
             if not msg.embeds or msg.author != self.bot.user:
                 continue
-            # Skip embeds that have no Status field (e.g. the header embed)
-            if not any(f.name == "Status" for f in msg.embeds[0].fields):
+            if not is_task_embed(msg.embeds[0]):
                 continue
             data = parse_task_embed(msg.embeds[0])
             if data["status"] == STATUS_OPEN:
@@ -68,23 +70,20 @@ class Tasks(commands.Cog):
                 dl_str = f" — due {deadline}" if deadline != "No deadline" else ""
                 assignee = data["assigned_to"]
                 assign_str = f" → {assignee}" if assignee != "Unassigned" else ""
-                open_tasks.append(
-                    f"• [{data['title']}]({msg.jump_url}){assign_str}{dl_str}"
-                )
+                open_tasks.append(f"• [{data['title']}]({msg.jump_url}){assign_str}{dl_str}")
 
         if not open_tasks:
             await interaction.followup.send("No open tasks found.", ephemeral=True)
             return
 
-        # Discord message limit: split into chunks of 10
-        chunks = [open_tasks[i:i+10] for i in range(0, len(open_tasks), 10)]
+        chunks = [open_tasks[i:i + 10] for i in range(0, len(open_tasks), 10)]
         for i, chunk in enumerate(chunks):
             header = f"**Open tasks ({len(open_tasks)} total):**\n" if i == 0 else ""
             await interaction.followup.send(header + "\n".join(chunk), ephemeral=True)
 
     @task_group.command(
         name="setup",
-        description="[Admin] Post a header embed in the task dashboard channel",
+        description="[Admin] Create or reset the pinned overview message in the dashboard",
     )
     @app_commands.default_permissions(manage_channels=True)
     async def task_setup(self, interaction: discord.Interaction) -> None:
@@ -95,20 +94,25 @@ class Tasks(commands.Cog):
             )
             return
 
-        embed = discord.Embed(
-            title="📋 Task Dashboard",
-            description=(
-                "All tasks are listed here.\n\n"
-                "**To create a task:** right-click any message in another channel → "
-                "**Apps → Create Task**.\n"
-                "Use the buttons on each task to complete, edit, reassign, or delete it."
-            ),
-            color=0x5865F2,
-        )
-        await channel.send(embed=embed)
-        await interaction.response.send_message(
-            "Dashboard header posted.", ephemeral=True
-        )
+        await interaction.response.defer(ephemeral=True)
+
+        # Remove any existing overview pin from this bot so we don't end up with duplicates
+        try:
+            pins = await channel.pins()
+            for pin in pins:
+                if (
+                    pin.author == self.bot.user
+                    and pin.embeds
+                    and (pin.embeds[0].title or "").startswith(OVERVIEW_TITLE_PREFIX)
+                ):
+                    await pin.unpin()
+                    await pin.delete()
+        except discord.HTTPException:
+            pass
+
+        msg = await channel.send(embed=build_overview_embed([]))
+        await msg.pin()
+        await interaction.followup.send("Overview message created and pinned.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:
