@@ -70,7 +70,7 @@ def build_overview_embed(tasks: list[dict], thread_id: int | None = None) -> dis
             data, url = t["data"], t["url"]
             line = f"• [{data['title']}]({url})"
             if data["assignee"] != "Unassigned":
-                line += f" — {data['assignee']}"
+                line += f" — `{data['assignee']}`"
             lines.append(line)
             dl = data["deadline"]
             if dl and dl != "No deadline":
