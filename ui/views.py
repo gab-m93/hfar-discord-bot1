@@ -225,34 +225,6 @@ class TaskManageView(discord.ui.View):
             view=DeleteConfirmView(self.thread_msg, self.overview_msg, self.thread),
         )
 
-    @discord.ui.select(
-        cls=discord.ui.UserSelect,
-        placeholder="Change assignee…",
-        min_values=0,
-        max_values=1,
-        row=1,
-    )
-    async def assign(
-        self, interaction: discord.Interaction, select: discord.ui.UserSelect
-    ) -> None:
-        data = parse_task_data_embed(self.thread_msg.embeds[0])
-        assignee = select.values[0] if select.values else None
-        new_embed = build_task_data_embed(
-            title=data["title"],
-            description=data["description"],
-            creator=data["creator"],
-            assignee=assignee.mention if assignee else "Unassigned",
-            deadline=data["deadline"],
-            source_url=data["source_url"],
-            status=data["status"],
-        )
-        await self.thread_msg.edit(embed=new_embed)
-        await rebuild_overview(self.overview_msg, self.thread)
-        name = assignee.display_name if assignee else "nobody"
-        await interaction.response.send_message(
-            f"Assignee updated to **{name}**.", ephemeral=True
-        )
-
 
 class DeleteConfirmView(discord.ui.View):
     def __init__(

@@ -44,6 +44,12 @@ class TaskCreateModal(discord.ui.Modal, title="Create Task"):
         max_length=1000,
         placeholder="Optional details…",
     )
+    assignee = discord.ui.TextInput(
+        label="Assign to (optional)",
+        required=False,
+        max_length=50,
+        placeholder="gabs / jo / niki / mex — or leave blank",
+    )
     deadline = discord.ui.TextInput(
         label="Deadline (optional)",
         required=False,
@@ -86,11 +92,12 @@ class TaskCreateModal(discord.ui.Modal, title="Create Task"):
             return
 
         deadline_val = _parse_deadline(self.deadline.value)
+        assignee_val = self.assignee.value.strip() or "Unassigned"
         data_embed = build_task_data_embed(
             title=self.task_title.value.strip(),
             description=self.description.value.strip(),
             creator=interaction.user.mention,
-            assignee="Unassigned",
+            assignee=assignee_val,
             deadline=deadline_val,
             source_url=self.source_url,
         )
@@ -112,6 +119,12 @@ class TaskEditModal(discord.ui.Modal, title="Edit Task"):
         required=False,
         max_length=1000,
     )
+    assignee = discord.ui.TextInput(
+        label="Assign to (leave blank to unassign)",
+        required=False,
+        max_length=50,
+        placeholder="gabs / jo / niki / mex — or leave blank",
+    )
     deadline = discord.ui.TextInput(
         label="Deadline (leave blank to clear)",
         required=False,
@@ -132,6 +145,7 @@ class TaskEditModal(discord.ui.Modal, title="Edit Task"):
         data = parse_task_data_embed(thread_msg.embeds[0])
         self.task_title.default = data["title"]
         self.description.default = data["description"]
+        self.assignee.default = data["assignee"] if data["assignee"] != "Unassigned" else ""
         dl = data["deadline"]
         self.deadline.default = dl if dl != "No deadline" else ""
 
@@ -142,12 +156,13 @@ class TaskEditModal(discord.ui.Modal, title="Edit Task"):
 
         data = parse_task_data_embed(self.thread_msg.embeds[0])
         deadline_val = _parse_deadline(self.deadline.value)
+        assignee_val = self.assignee.value.strip() or "Unassigned"
 
         new_embed = build_task_data_embed(
             title=self.task_title.value.strip(),
             description=self.description.value.strip(),
             creator=data["creator"],
-            assignee=data["assignee"],
+            assignee=assignee_val,
             deadline=deadline_val,
             source_url=data["source_url"],
             status=data["status"],
