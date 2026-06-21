@@ -49,9 +49,11 @@ Still on the **Bot** page:
 | Permission | Why |
 |---|---|
 | `View Channels` | See the channels it operates in |
-| `Send Messages` | Post task embeds to the dashboard channel |
+| `Send Messages` | Post the overview message to the dashboard channel |
 | `Embed Links` | Required to send Discord embeds |
-| `Read Message History` | Used by `/task list` to scan the dashboard for open tasks |
+| `Read Message History` | Used by `/task list` and to find the overview message |
+| `Create Public Threads` | Creates the hidden "Task Data" thread on the overview message |
+| `Send Messages in Threads` | Writes task data into that thread |
 
 These are the same permissions you'll select again in step 1d when generating the invite URL — setting them here just establishes the defaults.
 
@@ -66,6 +68,8 @@ These are the same permissions you'll select again in step 1d when generating th
    - `Embed Links`
    - `Read Message History`
    - `View Channels`
+   - `Create Public Threads`
+   - `Send Messages in Threads`
 4. Copy the generated URL at the bottom, open it in a browser, and invite the bot to your server.
 
 ---

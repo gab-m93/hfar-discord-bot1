@@ -5,13 +5,12 @@ from discord.ext import commands
 import config
 from ui.embeds import (
     build_overview_embed,
-    parse_task_embed,
-    is_task_embed,
+    parse_task_data_embed,
     OVERVIEW_TITLE_PREFIX,
     STATUS_OPEN,
 )
 from ui.modals import TaskCreateModal
-from ui.views import TaskDashboardView
+from ui.views import OverviewView, find_overview, get_task_thread
 
 
 class Tasks(commands.Cog):
@@ -43,11 +42,9 @@ class Tasks(commands.Cog):
             TaskCreateModal(source_content=source_content, source_url=message.jump_url)
         )
 
-    # ── Slash commands ──────────────────────────────────────────────────────
-
     task_group = app_commands.Group(name="task", description="Task management commands")
 
-    @task_group.command(name="list", description="List all open tasks in the dashboard")
+    @task_group.command(name="list", description="List all open tasks")
     async def task_list(self, interaction: discord.Interaction) -> None:
         channel = self.bot.get_channel(config.TASK_DASHBOARD_CHANNEL_ID)
         if channel is None:
@@ -57,23 +54,32 @@ class Tasks(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        open_tasks: list[str] = []
+        overview_msg = await find_overview(channel)
+        if overview_msg is None:
+            await interaction.followup.send("No overview found. Run `/task setup`.", ephemeral=True)
+            return
 
-        async for msg in channel.history(limit=200):
-            if not msg.embeds or msg.author != self.bot.user:
-                continue
-            if not is_task_embed(msg.embeds[0]):
-                continue
-            data = parse_task_embed(msg.embeds[0])
+        thread = await get_task_thread(overview_msg)
+        if thread is None:
+            await interaction.followup.send("Task data thread not found.", ephemeral=True)
+            return
+
+        messages = []
+        async for msg in thread.history(limit=100):
+            if msg.embeds and msg.author == self.bot.user:
+                messages.append(msg)
+        messages.reverse()
+
+        open_tasks = []
+        for msg in messages:
+            data = parse_task_data_embed(msg.embeds[0])
             if data["status"] == STATUS_OPEN:
-                deadline = data["deadline"]
-                dl_str = f" — due {deadline}" if deadline != "No deadline" else ""
-                assignee = data["assigned_to"]
-                assign_str = f" → {assignee}" if assignee != "Unassigned" else ""
-                open_tasks.append(f"• [{data['title']}]({msg.jump_url}){assign_str}{dl_str}")
+                dl_str = f" — due {data['deadline']}" if data["deadline"] != "No deadline" else ""
+                a_str = f" → {data['assignee']}" if data["assignee"] != "Unassigned" else ""
+                open_tasks.append(f"• [{data['title']}]({data['source_url']}){a_str}{dl_str}")
 
         if not open_tasks:
-            await interaction.followup.send("No open tasks found.", ephemeral=True)
+            await interaction.followup.send("No open tasks.", ephemeral=True)
             return
 
         chunks = [open_tasks[i:i + 10] for i in range(0, len(open_tasks), 10)]
@@ -83,7 +89,7 @@ class Tasks(commands.Cog):
 
     @task_group.command(
         name="setup",
-        description="[Admin] Create or reset the pinned overview message in the dashboard",
+        description="[Admin] Create or reset the overview message and task data thread",
     )
     @app_commands.default_permissions(manage_channels=True)
     async def task_setup(self, interaction: discord.Interaction) -> None:
@@ -96,7 +102,7 @@ class Tasks(commands.Cog):
 
         await interaction.response.defer(ephemeral=True)
 
-        # Remove any existing overview pin from this bot so we don't end up with duplicates
+        # Remove any existing overview (pinned or oldest)
         try:
             pins = await channel.pins()
             for pin in pins:
@@ -110,14 +116,56 @@ class Tasks(commands.Cog):
         except discord.HTTPException:
             pass
 
-        msg = await channel.send(embed=build_overview_embed([]))
-        try:
-            await msg.pin()
-            note = ""
-        except discord.Forbidden:
-            note = "\n⚠️ Could not pin the message — grant the bot **Manage Messages** permission in the channel and run `/task setup` again, or pin it manually."
+        async for msg in channel.history(limit=50, oldest_first=True):
+            if (
+                msg.author == self.bot.user
+                and msg.embeds
+                and (msg.embeds[0].title or "").startswith(OVERVIEW_TITLE_PREFIX)
+            ):
+                try:
+                    await msg.delete()
+                except discord.HTTPException:
+                    pass
+                break
 
-        await interaction.followup.send(f"Overview message created.{note}", ephemeral=True)
+        # Post the overview message
+        overview_msg = await channel.send(
+            embed=build_overview_embed([]), view=OverviewView(None)
+        )
+
+        # Create the task data thread
+        try:
+            thread = await overview_msg.create_thread(
+                name="Task Data",
+                auto_archive_duration=60,
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "Overview created but could not create the task data thread.\n"
+                "Grant the bot **Create Public Threads** and **Send Messages in Threads** "
+                "permissions in the channel and run `/task setup` again.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as e:
+            await interaction.followup.send(f"Failed to create thread: {e}", ephemeral=True)
+            return
+
+        # Update footer with thread ID
+        await overview_msg.edit(embed=build_overview_embed([], thread_id=thread.id))
+
+        # Try to pin
+        try:
+            await overview_msg.pin()
+            pin_note = ""
+        except discord.Forbidden:
+            pin_note = (
+                "\n⚠️ Could not pin — grant **Manage Messages** permission or pin manually."
+            )
+
+        await interaction.followup.send(
+            f"Overview message and task data thread created.{pin_note}", ephemeral=True
+        )
 
 
 async def setup(bot: commands.Bot) -> None:

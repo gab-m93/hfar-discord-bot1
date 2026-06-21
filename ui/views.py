@@ -1,24 +1,23 @@
+import re
 import discord
 import config
 from ui.embeds import (
-    build_compact_task_embed,
+    build_task_data_embed,
     build_overview_embed,
-    parse_task_embed,
-    is_completed,
-    is_task_embed,
+    parse_task_data_embed,
     OVERVIEW_TITLE_PREFIX,
     STATUS_OPEN,
     STATUS_COMPLETED,
 )
 
 
-async def rebuild_overview(channel: discord.TextChannel) -> None:
-    """Scan the dashboard channel and update the overview message."""
-    # Find the overview: check pins first, then fall back to oldest message in channel
-    overview_msg: discord.Message | None = None
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+async def find_overview(channel: discord.TextChannel) -> discord.Message | None:
+    """Find the overview message: check pins first, then oldest channel history."""
     try:
         pins = await channel.pins()
-        overview_msg = next(
+        msg = next(
             (
                 p for p in pins
                 if p.author == channel.guild.me
@@ -27,39 +26,150 @@ async def rebuild_overview(channel: discord.TextChannel) -> None:
             ),
             None,
         )
+        if msg:
+            return msg
     except discord.HTTPException:
         pass
 
-    if overview_msg is None:
-        async for msg in channel.history(limit=50, oldest_first=True):
-            if (
-                msg.author == channel.guild.me
-                and msg.embeds
-                and (msg.embeds[0].title or "").startswith(OVERVIEW_TITLE_PREFIX)
-            ):
-                overview_msg = msg
-                break
+    async for msg in channel.history(limit=50, oldest_first=True):
+        if (
+            msg.author == channel.guild.me
+            and msg.embeds
+            and (msg.embeds[0].title or "").startswith(OVERVIEW_TITLE_PREFIX)
+        ):
+            return msg
+    return None
 
-    if overview_msg is None:
-        return
 
-    # Collect open tasks from channel history (oldest first)
-    open_tasks: list[dict] = []
+async def get_task_thread(overview_msg: discord.Message) -> discord.Thread | None:
+    """Extract thread ID from the overview embed footer and fetch the thread."""
+    if not overview_msg.embeds:
+        return None
+    footer = overview_msg.embeds[0].footer.text or ""
+    m = re.search(r'thread:(\d+)', footer)
+    if not m:
+        return None
+    thread_id = int(m.group(1))
+    try:
+        thread = overview_msg.guild.get_thread(thread_id)
+        if thread:
+            return thread
+        return await overview_msg.guild.fetch_channel(thread_id)
+    except (discord.NotFound, discord.HTTPException):
+        return None
+
+
+async def rebuild_overview(
+    overview_msg: discord.Message, thread: discord.Thread
+) -> None:
+    """Read all task messages from the thread and update the overview message."""
     messages: list[discord.Message] = []
-    async for msg in channel.history(limit=200):
-        if msg.author == channel.guild.me and msg.embeds and is_task_embed(msg.embeds[0]):
+    async for msg in thread.history(limit=100):
+        if msg.embeds and msg.author == thread.guild.me:
             messages.append(msg)
     messages.reverse()  # oldest first
-    for msg in messages:
-        data = parse_task_embed(msg.embeds[0])
-        if data["status"] == STATUS_OPEN:
-            open_tasks.append({"data": data, "url": msg.jump_url})
 
-    await overview_msg.edit(embed=build_overview_embed(open_tasks))
+    open_tasks = []
+    for msg in messages:
+        data = parse_task_data_embed(msg.embeds[0])
+        if data["status"] == STATUS_OPEN:
+            open_tasks.append({"data": data, "url": msg.jump_url, "id": str(msg.id)})
+
+    footer = overview_msg.embeds[0].footer.text or ""
+    m = re.search(r'thread:(\d+)', footer)
+    thread_id = int(m.group(1)) if m else thread.id
+
+    embed = build_overview_embed(open_tasks, thread_id=thread_id)
+
+    if open_tasks:
+        options = [
+            discord.SelectOption(
+                label=t["data"]["title"][:100],
+                value=t["id"],
+                description=_option_desc(t["data"])[:100],
+            )
+            for t in open_tasks
+        ]
+        view = OverviewView(options)
+    else:
+        view = OverviewView(None)
+
+    await overview_msg.edit(embed=embed, view=view)
+
+
+def _option_desc(data: dict) -> str:
+    parts = []
+    if data["assignee"] != "Unassigned":
+        parts.append(data["assignee"])
+    if data["deadline"] != "No deadline":
+        parts.append(f"due {data['deadline']}")
+    return " · ".join(parts) if parts else "No deadline · Unassigned"
+
+
+# ── Views ──────────────────────────────────────────────────────────────────────
+
+class OverviewView(discord.ui.View):
+    """Persistent select menu attached to the overview message."""
+
+    def __init__(self, options: list[discord.SelectOption] | None) -> None:
+        super().__init__(timeout=None)
+        if options:
+            self.task_select.options = options
+            self.task_select.disabled = False
+        else:
+            self.task_select.options = [discord.SelectOption(label="—", value="0")]
+            self.task_select.disabled = True
+
+    @discord.ui.select(
+        custom_id="overview_task_select",
+        placeholder="Select a task to manage…",
+        min_values=1,
+        max_values=1,
+        options=[discord.SelectOption(label="—", value="0")],
+    )
+    async def task_select(
+        self, interaction: discord.Interaction, select: discord.ui.Select
+    ) -> None:
+        task_msg_id = int(select.values[0])
+        overview_msg = interaction.message
+
+        thread = await get_task_thread(overview_msg)
+        if thread is None:
+            await interaction.response.send_message(
+                "Could not find the task data thread. Run `/task setup` again.", ephemeral=True
+            )
+            return
+
+        try:
+            task_msg = await thread.fetch_message(task_msg_id)
+        except discord.NotFound:
+            await interaction.response.send_message(
+                "That task no longer exists. Refreshing the overview…", ephemeral=True
+            )
+            await rebuild_overview(overview_msg, thread)
+            return
+
+        data = parse_task_data_embed(task_msg.embeds[0])
+        summary = discord.Embed(title=data["title"], color=0x5865F2)
+        summary.add_field(name="Assigned to", value=data["assignee"], inline=True)
+        summary.add_field(name="Deadline", value=data["deadline"], inline=True)
+        summary.add_field(name="Created by", value=data["creator"], inline=True)
+        if data["description"]:
+            summary.add_field(name="Notes", value=data["description"], inline=False)
+        if data["source_url"]:
+            summary.add_field(
+                name="Source", value=f"[Jump to message]({data['source_url']})", inline=False
+            )
+
+        await interaction.response.send_message(
+            embed=summary,
+            view=TaskManageView(task_msg, overview_msg, thread),
+            ephemeral=True,
+        )
 
 
 class TaskCreationView(discord.ui.View):
-    """Ephemeral view shown after TaskCreateModal; lets the user assign someone then post."""
+    """Ephemeral view shown after TaskCreateModal; lets the user assign then post."""
 
     def __init__(
         self,
@@ -102,104 +212,89 @@ class TaskCreationView(discord.ui.View):
         channel = interaction.client.get_channel(config.TASK_DASHBOARD_CHANNEL_ID)
         if channel is None:
             await interaction.edit_original_response(
-                content="Task dashboard channel not found. Check TASK_DASHBOARD_CHANNEL_ID.",
+                content="Task dashboard channel not found. Check TASK_DASHBOARD_CHANNEL_ID."
             )
             return
 
-        embed = build_compact_task_embed(
+        overview_msg = await find_overview(channel)
+        if overview_msg is None:
+            await interaction.edit_original_response(
+                content="No overview message found. Ask an admin to run `/task setup` first."
+            )
+            return
+
+        thread = await get_task_thread(overview_msg)
+        if thread is None:
+            await interaction.edit_original_response(
+                content="Task data thread not found. Ask an admin to run `/task setup` again."
+            )
+            return
+
+        data_embed = build_task_data_embed(
             title=self.title,
             description=self.description,
             creator=self.creator.mention,
             assignee=self.assignee.mention if self.assignee else "Unassigned",
             deadline=self.deadline,
-            status=STATUS_OPEN,
-            source_url=self.source_url or None,
+            source_url=self.source_url,
         )
         try:
-            await channel.send(embed=embed, view=TaskDashboardView())
+            await thread.send(embed=data_embed)
         except discord.HTTPException as e:
-            await interaction.edit_original_response(content=f"Failed to post task: {e}")
+            await interaction.edit_original_response(content=f"Failed to save task: {e}")
             return
 
-        await rebuild_overview(channel)
+        await rebuild_overview(overview_msg, thread)
         self.stop()
-        await interaction.edit_original_response(
-            content="✅ Task created in the dashboard!", view=None
-        )
-
-
-class TaskDashboardView(discord.ui.View):
-    """Persistent view attached to every compact task embed."""
-
-    def __init__(self) -> None:
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="⚙️ Manage",
-        style=discord.ButtonStyle.secondary,
-        custom_id="task_manage",
-    )
-    async def manage_callback(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ) -> None:
-        if not interaction.message.embeds:
-            await interaction.response.send_message("Could not read task data.", ephemeral=True)
-            return
-        data = parse_task_embed(interaction.message.embeds[0])
-        summary = discord.Embed(
-            title=data["title"],
-            description=f"**Status:** {data['status']}  |  **Assigned to:** {data['assigned_to']}  |  **Deadline:** {data['deadline']}",
-            color=interaction.message.embeds[0].color,
-        )
-        await interaction.response.send_message(
-            embed=summary,
-            view=TaskManageView(interaction.message),
-            ephemeral=True,
-        )
+        await interaction.edit_original_response(content="✅ Task created!", view=None)
 
 
 class TaskManageView(discord.ui.View):
-    """Ephemeral panel for all task actions: complete, edit, assign, delete."""
+    """Ephemeral panel opened when a task is selected from the overview dropdown."""
 
-    def __init__(self, task_message: discord.Message) -> None:
+    def __init__(
+        self,
+        thread_msg: discord.Message,
+        overview_msg: discord.Message,
+        thread: discord.Thread,
+    ) -> None:
         super().__init__(timeout=60)
-        self.task_message = task_message
-
-    async def _dashboard_channel(self, client: discord.Client) -> discord.TextChannel | None:
-        return client.get_channel(config.TASK_DASHBOARD_CHANNEL_ID)
+        self.thread_msg = thread_msg
+        self.overview_msg = overview_msg
+        self.thread = thread
 
     @discord.ui.button(label="✅ Complete", style=discord.ButtonStyle.success, row=0)
     async def complete(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        embed = self.task_message.embeds[0]
-        if is_completed(embed):
+        data = parse_task_data_embed(self.thread_msg.embeds[0])
+        if data["status"] == STATUS_COMPLETED:
             await interaction.response.send_message("Already completed.", ephemeral=True)
             return
-
-        data = parse_task_embed(embed)
-        new_embed = build_compact_task_embed(
+        new_embed = build_task_data_embed(
             title=data["title"],
             description=data["description"],
-            creator=data["created_by"],
-            assignee=data["assigned_to"],
+            creator=data["creator"],
+            assignee=data["assignee"],
             deadline=data["deadline"],
+            source_url=data["source_url"],
             status=STATUS_COMPLETED,
-            source_url=data["source_url"] or None,
         )
-        await self.task_message.edit(embed=new_embed, view=TaskDashboardView())
-        channel = await self._dashboard_channel(interaction.client)
-        if channel:
-            await rebuild_overview(channel)
+        await self.thread_msg.edit(embed=new_embed)
+        await rebuild_overview(self.overview_msg, self.thread)
         self.stop()
-        await interaction.response.edit_message(content="✅ Task marked as completed.", embed=None, view=None)
+        await interaction.response.edit_message(
+            content="✅ Task marked as completed.", embed=None, view=None
+        )
 
     @discord.ui.button(label="✏️ Edit", style=discord.ButtonStyle.primary, row=0)
     async def edit(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         from ui.modals import TaskEditModal
-        await interaction.response.send_modal(TaskEditModal(self.task_message))
+        await interaction.response.send_modal(
+            TaskEditModal(self.thread_msg, self.overview_msg, self.thread)
+        )
 
     @discord.ui.button(label="🗑️ Delete", style=discord.ButtonStyle.danger, row=0)
     async def delete(
@@ -208,7 +303,7 @@ class TaskManageView(discord.ui.View):
         await interaction.response.edit_message(
             content="Are you sure you want to delete this task?",
             embed=None,
-            view=DeleteConfirmView(self.task_message),
+            view=DeleteConfirmView(self.thread_msg, self.overview_msg, self.thread),
         )
 
     @discord.ui.select(
@@ -221,23 +316,19 @@ class TaskManageView(discord.ui.View):
     async def assign(
         self, interaction: discord.Interaction, select: discord.ui.UserSelect
     ) -> None:
-        embed = self.task_message.embeds[0]
-        data = parse_task_embed(embed)
+        data = parse_task_data_embed(self.thread_msg.embeds[0])
         assignee = select.values[0] if select.values else None
-
-        new_embed = build_compact_task_embed(
+        new_embed = build_task_data_embed(
             title=data["title"],
             description=data["description"],
-            creator=data["created_by"],
+            creator=data["creator"],
             assignee=assignee.mention if assignee else "Unassigned",
             deadline=data["deadline"],
+            source_url=data["source_url"],
             status=data["status"],
-            source_url=data["source_url"] or None,
         )
-        await self.task_message.edit(embed=new_embed)
-        channel = await self._dashboard_channel(interaction.client)
-        if channel:
-            await rebuild_overview(channel)
+        await self.thread_msg.edit(embed=new_embed)
+        await rebuild_overview(self.overview_msg, self.thread)
         name = assignee.display_name if assignee else "nobody"
         await interaction.response.send_message(
             f"Assignee updated to **{name}**.", ephemeral=True
@@ -245,20 +336,23 @@ class TaskManageView(discord.ui.View):
 
 
 class DeleteConfirmView(discord.ui.View):
-    """Replaces the manage panel when delete is clicked; asks for confirmation."""
-
-    def __init__(self, task_message: discord.Message) -> None:
+    def __init__(
+        self,
+        thread_msg: discord.Message,
+        overview_msg: discord.Message,
+        thread: discord.Thread,
+    ) -> None:
         super().__init__(timeout=30)
-        self.task_message = task_message
+        self.thread_msg = thread_msg
+        self.overview_msg = overview_msg
+        self.thread = thread
 
     @discord.ui.button(label="Yes, delete", style=discord.ButtonStyle.danger)
     async def confirm(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        channel = interaction.client.get_channel(config.TASK_DASHBOARD_CHANNEL_ID)
-        await self.task_message.delete()
-        if channel:
-            await rebuild_overview(channel)
+        await self.thread_msg.delete()
+        await rebuild_overview(self.overview_msg, self.thread)
         self.stop()
         await interaction.response.edit_message(content="Task deleted.", view=None)
 

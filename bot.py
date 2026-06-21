@@ -5,7 +5,7 @@ import discord
 from discord.ext import commands
 
 import config
-from ui.views import TaskDashboardView
+from ui.views import OverviewView
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ bot = commands.Bot(
 
 @bot.event
 async def on_ready() -> None:
-    bot.add_view(TaskDashboardView())
+    bot.add_view(OverviewView(None))
     await bot.tree.sync()
     log.info("Logged in as %s (id=%s)", bot.user, bot.user.id)
 
